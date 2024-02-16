@@ -9,8 +9,9 @@ import random
 import time
 from csv import reader
 from datetime import datetime
+import os
 
-from kafka import KafkaProducer
+from confluent_kafka import Producer
 
 from config.kafka import get_configs
 from models.product import Product
@@ -21,9 +22,9 @@ config = configparser.ConfigParser()
 config.read("configuration/configuration.ini")
 
 # *** CONFIGURATION ***
-topic_products = config["KAFKA"]["topic_products"]
-topic_purchases = config["KAFKA"]["topic_purchases"]
-topic_inventories = config["KAFKA"]["topic_inventories"]
+topic_products = os.getenv("topic_products",config["KAFKA"]["topic_products"])
+topic_purchases = os.getenv("topic_purchases",config["KAFKA"]["topic_purchases"])
+topic_inventories = os.getenv("topic_inventories",config["KAFKA"]["topic_inventories"])
 
 min_sale_freq = int(config["SALES"]["min_sale_freq"])
 max_sale_freq = int(config["SALES"]["max_sale_freq"])
@@ -44,6 +45,7 @@ restock_amount = int(config["INVENTORY"]["restock_amount"])
 # *** VARIABLES ***
 products = []
 propensity_to_buy_range = []
+p=Producer(get_configs())
 
 
 def main():
@@ -145,14 +147,13 @@ def restock_item(product_id):
 
 # serialize object to json and publish message to kafka topic
 def publish_to_kafka(topic, message):
-    configs = get_configs()
-
-    producer = KafkaProducer(
-        value_serializer=lambda v: json.dumps(vars(v)).encode("utf-8"),
-        **configs,
-    )
-    producer.send(topic, value=message)
-    print("Topic: {0}, Value: {1}".format(topic, message))
+    try:
+        json_message = json.dumps(message.__dict__)
+        print(f'Sending message to topic: {topic} , message: {json_message}')
+        p.produce(topic, json_message , callback=delivery_callback)
+    except BufferError as e:
+        print('%% Local producer queue is full (%d messages awaiting delivery): try again\n' % len(p))
+    p.poll(0)
 
 
 # convert uppercase boolean values from CSV file to Python
@@ -207,6 +208,11 @@ def random_add_supplements(product_id):
         return True
     return False
 
+def delivery_callback(err, msg):
+    if err:
+        sys.stderr.write('%% Message failed delivery: %s\n' % err)
+    else:
+        sys.stderr.write('%% Message delivered to %s [%d] @ %o\n' % (msg.topic(), msg.partition(), msg.offset()))
 
 if __name__ == "__main__":
     main()
